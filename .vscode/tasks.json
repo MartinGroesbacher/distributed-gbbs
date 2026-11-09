@@ -1,0 +1,34 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Bazel: Build BFS",
+            "type": "shell",
+            "command": "bazel",
+            "args": [
+                "build",
+                "//benchmarks/BFS/NonDeterministicBFS:BFS_main"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "Bazel: Run BFS",
+            "type": "shell",
+            "command": "bazel",
+            "args": [
+                "run",
+                "//benchmarks/BFS/NonDeterministicBFS:BFS_main",
+                "--",
+                "-s",
+                "-src",
+                "10",
+                "${workspaceFolder}/inputs/rMatGraph_J_5_100"
+            ],
+            "problemMatcher": []
+        }
+    ]
+}

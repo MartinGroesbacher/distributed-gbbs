@@ -1,0 +1,24 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug GBBS BFS",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/bazel-bin/benchmarks/BFS/NonDeterministicBFS/BFS_main",
+            "args": [
+                "-s",
+                "-src",
+                "10",
+                "${workspaceFolder}/inputs/rMatGraph_J_5_100"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb",
+            "preLaunchTask": "Bazel: Build BFS"
+        }
+    ]
+}
