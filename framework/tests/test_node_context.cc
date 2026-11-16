@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "framework/common/graph_adapter.h"
+#include "framework/message_passing/message_size.h"
 #include "framework/message_passing/simulator.h"
 
 namespace distributed {
@@ -14,18 +15,27 @@ struct TestState {
 
 struct TestMessage {
   gbbs::uintE sender;
+  size_t extra_bits = 0;
 };
+
+// Logical encoded size of our test messages.
+size_t test_message_bits(const TestMessage& message, size_t n) {
+  return vertex_id_bits(n) + message.extra_bits;
+}
 
 template <class Graph>
 double test_node_context(Graph& G, gbbs::commandLine P) {
   GraphAdapter<Graph> adapter(G);
+
+  const size_t n = adapter.num_vertices();
+  const size_t id_bits = vertex_id_bits(n);
 
   // ============================================================
   // Test 1: Basic message passing through NodeContext
   // ============================================================
 
   Simulator<GraphAdapter<Graph>, TestState, TestMessage> simulator(
-      adapter, CommunicationModel::CONGEST);
+      adapter, test_message_bits, CommunicationModel::CONGEST);
 
   if (simulator.model() != CommunicationModel::CONGEST) {
     throw std::runtime_error("Incorrect communication model");
@@ -70,18 +80,26 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
     throw std::runtime_error("Incorrect round count");
   }
 
+  if (G.m > 0 && simulator.max_message_bits() != id_bits) {
+    throw std::runtime_error("Incorrect maximum message size");
+  }
+
+  if (simulator.total_message_bits() != G.m * id_bits) {
+    throw std::runtime_error("Incorrect total communication volume");
+  }
+
   std::cout << "NodeContext verification passed!\n";
 
   // ============================================================
   // Test 2: Vertex termination
   // ============================================================
 
-  if (adapter.num_vertices() == 0) {
+  if (n == 0) {
     throw std::runtime_error("Termination test requires a nonempty graph");
   }
 
   Simulator<GraphAdapter<Graph>, TestState, TestMessage>
-      termination_simulator(adapter);
+      termination_simulator(adapter, test_message_bits);
 
   std::atomic<size_t> vertex_zero_executions{0};
 
@@ -175,7 +193,7 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
        {CommunicationModel::LOCAL, CommunicationModel::CONGEST}) {
 
     Simulator<GraphAdapter<Graph>, TestState, TestMessage>
-        duplicate_simulator(adapter, model);
+        duplicate_simulator(adapter, test_message_bits, model);
 
     if (duplicate_simulator.model() != model) {
       throw std::runtime_error("Communication model mismatch");
@@ -184,9 +202,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
     std::atomic<size_t> duplicates_rejected{0};
     std::atomic<size_t> messages_sent{0};
 
-    // Round 1:
-    // Each vertex sends one message to each neighbor.
-    // It then attempts a duplicate send to its first neighbor.
     duplicate_simulator.execute_round([&](auto& ctx) {
       bool has_neighbor = false;
       gbbs::uintE first_neighbor = 0;
@@ -198,7 +213,9 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
         }
 
         ctx.send(neighbor, TestMessage{ctx.id()});
-        messages_sent.fetch_add(1, std::memory_order_relaxed);
+
+        messages_sent.fetch_add(
+            1, std::memory_order_relaxed);
       });
 
       if (has_neighbor) {
@@ -211,10 +228,9 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
       }
     });
 
-    // Count vertices with at least one neighbor.
     size_t expected_rejections = 0;
 
-    for (size_t vertex = 0; vertex < adapter.num_vertices(); ++vertex) {
+    for (size_t vertex = 0; vertex < n; ++vertex) {
       bool has_neighbor = false;
 
       adapter.for_each_neighbor(
@@ -238,7 +254,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
           "Incorrect number of successful sends");
     }
 
-    // Round 2: Verify that only the first messages arrived.
     duplicate_simulator.execute_round([&](auto& ctx) {
       const size_t expected =
           G.get_vertex(ctx.id()).out_degree();
@@ -250,7 +265,13 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
     });
 
     if (duplicate_simulator.completed_rounds() != 2) {
-      throw std::runtime_error("Incorrect duplicate-test round count");
+      throw std::runtime_error(
+          "Incorrect duplicate-test round count");
+    }
+
+    if (duplicate_simulator.total_message_bits() != G.m * id_bits) {
+      throw std::runtime_error(
+          "Incorrect communication volume after duplicate rejection");
     }
 
     if (model == CommunicationModel::LOCAL) {
@@ -259,6 +280,132 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
       std::cout << "CONGEST message restriction passed!\n";
     }
   }
+
+  // ============================================================
+  // Test 4: Communication statistics and reference bandwidth
+  // ============================================================
+
+  // We use a reference constant of 2:
+  // B(n) = 2 * max(1, ceil(log2(n))).
+  const size_t reference_constant = 2;
+  const size_t reference_bits =
+      reference_bandwidth_bits(n, reference_constant);
+
+  Simulator<GraphAdapter<Graph>, TestState, TestMessage>
+      statistics_simulator(
+          adapter,
+          test_message_bits,
+          CommunicationModel::CONGEST,
+          reference_constant);
+
+  if (statistics_simulator.reference_bandwidth_bits() !=
+      reference_bits) {
+    throw std::runtime_error(
+        "Incorrect reference bandwidth");
+  }
+
+  // Round 1: Send messages of different sizes.
+  //
+  // Vertex 0 sends a deliberately large message.
+  // Other vertices send ordinary vertex IDs.
+  statistics_simulator.execute_round([](auto& ctx) {
+    const size_t extra_bits = (ctx.id() == 0) ? 100 : 0;
+
+    ctx.broadcast(TestMessage{ctx.id(), extra_bits});
+  });
+
+  // Expected maximum message size.
+  // If vertex 0 has neighbors, its large message was sent.
+  const size_t expected_max =
+      neighbors_of_zero.empty() ? id_bits : id_bits + 100;
+
+  if (G.m > 0 &&
+      statistics_simulator.max_message_bits() != expected_max) {
+    throw std::runtime_error(
+        "Incorrect maximum message size");
+  }
+
+  if (G.m > 0 &&
+      statistics_simulator.max_edge_bits_per_round() != expected_max) {
+    throw std::runtime_error(
+        "Incorrect maximum edge communication");
+  }
+
+  // Every adjacency entry produces one message.
+  // Messages from vertex 0 contain 100 additional bits.
+  const size_t expected_total =
+      G.m * id_bits + neighbors_of_zero.size() * 100;
+
+  if (statistics_simulator.total_message_bits() != expected_total) {
+    throw std::runtime_error(
+        "Incorrect total communication volume");
+  }
+
+  const bool expected_warning =
+      G.m > 0 && expected_max > reference_bits;
+
+  if (statistics_simulator.reference_bandwidth_exceeded() !=
+      expected_warning) {
+    throw std::runtime_error(
+        "Incorrect reference bandwidth warning");
+  }
+
+  // Round 2: Check that large messages were delivered normally.
+  statistics_simulator.execute_round([&](auto& ctx) {
+    const size_t expected =
+        G.get_vertex(ctx.id()).out_degree();
+
+    if (ctx.messages().size() != expected) {
+      throw std::runtime_error(
+          "Large messages were not delivered correctly");
+    }
+
+    for (const auto& message : ctx.messages()) {
+      const size_t expected_extra =
+          message.sender == 0 ? 100 : 0;
+
+      if (message.payload.sender != message.sender ||
+          message.payload.extra_bits != expected_extra) {
+        throw std::runtime_error(
+            "Incorrect large message contents");
+      }
+    }
+  });
+
+  // No new messages were sent in round 2.
+  // The accumulated statistics must remain unchanged.
+  if (statistics_simulator.total_message_bits() != expected_total) {
+    throw std::runtime_error(
+        "Communication statistics changed unexpectedly");
+  }
+
+  if (statistics_simulator.completed_rounds() != 2) {
+    throw std::runtime_error(
+        "Incorrect statistics-test round count");
+  }
+
+  std::cout << "Communication statistics verification passed!\n";
+
+  // Print an example of the recorded statistics.
+  std::cout << "  Vertices: " << n << "\n";
+  std::cout << "  Rounds: "
+            << statistics_simulator.completed_rounds() << "\n";
+  std::cout << "  Maximum message: "
+            << statistics_simulator.max_message_bits()
+            << " bits\n";
+  std::cout << "  Maximum edge load per round: "
+            << statistics_simulator.max_edge_bits_per_round()
+            << " bits\n";
+  std::cout << "  Total communication: "
+            << statistics_simulator.total_message_bits()
+            << " bits\n";
+  std::cout << "  Reference bandwidth: "
+            << statistics_simulator.reference_bandwidth_bits()
+            << " bits\n";
+  std::cout << "  Reference exceeded: "
+            << (statistics_simulator.reference_bandwidth_exceeded()
+                    ? "yes" : "no")
+            << "\n";
 
   return 0.0;
 }

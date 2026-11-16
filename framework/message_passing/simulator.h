@@ -13,14 +13,20 @@ class Simulator {
   using Runtime = MessagePassingRuntime<Graph, State, Message>;
   using Context = NodeContext<Graph, State, Message>;
   using VertexId = gbbs::uintE;
+  using MessageSizeFunction = typename Runtime::MessageSizeFunction;
 
   explicit Simulator(
       const Graph& graph,
-      CommunicationModel model = CommunicationModel::CONGEST)
+      MessageSizeFunction message_size,
+      CommunicationModel model = CommunicationModel::CONGEST,
+      size_t reference_constant = 0)
       : graph_(graph),
-        runtime_(graph, model) {}
+        runtime_(
+            graph,
+            std::move(message_size),
+            model,
+            reference_constant) {}
 
-  // Execute one synchronous communication round.
   template <class F>
   void execute_round(F&& process_vertex) {
     runtime_.execute_round([&](VertexId vertex, Runtime& runtime) {
@@ -29,22 +35,38 @@ class Simulator {
     });
   }
 
-  // Return the selected communication model.
   CommunicationModel model() const {
     return runtime_.model();
   }
 
-  // Number of completed synchronous rounds.
   size_t completed_rounds() const {
     return runtime_.completed_rounds();
   }
 
-  // Check whether a particular vertex has terminated.
+  size_t max_message_bits() const {
+    return runtime_.max_message_bits();
+  }
+
+  size_t max_edge_bits_per_round() const {
+    return runtime_.max_edge_bits_per_round();
+  }
+
+  size_t total_message_bits() const {
+    return runtime_.total_message_bits();
+  }
+
+  size_t reference_bandwidth_bits() const {
+    return runtime_.reference_bandwidth_bits();
+  }
+
+  bool reference_bandwidth_exceeded() const {
+    return runtime_.reference_bandwidth_exceeded();
+  }
+
   bool is_terminated(VertexId vertex) const {
     return runtime_.is_terminated(vertex);
   }
 
-  // Check whether every vertex has terminated.
   bool all_terminated() const {
     return runtime_.all_terminated();
   }

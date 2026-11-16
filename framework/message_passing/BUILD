@@ -4,6 +4,7 @@ cc_library(
         "runtime.h",
         "node_context.h",
         "simulator.h",
+        "message_size.h",
     ],
     deps = [
         "//framework/common:graph_adapter",
