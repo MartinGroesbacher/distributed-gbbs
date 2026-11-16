@@ -24,7 +24,12 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
   // Test 1: Basic message passing through NodeContext
   // ============================================================
 
-  Simulator<GraphAdapter<Graph>, TestState, TestMessage> simulator(adapter);
+  Simulator<GraphAdapter<Graph>, TestState, TestMessage> simulator(
+      adapter, CommunicationModel::CONGEST);
+
+  if (simulator.model() != CommunicationModel::CONGEST) {
+    throw std::runtime_error("Incorrect communication model");
+  }
 
   // Round 1: Every vertex broadcasts its own ID.
   simulator.execute_round([](auto& ctx) {
@@ -61,6 +66,10 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
     }
   });
 
+  if (simulator.completed_rounds() != 3) {
+    throw std::runtime_error("Incorrect round count");
+  }
+
   std::cout << "NodeContext verification passed!\n";
 
   // ============================================================
@@ -76,7 +85,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
 
   std::atomic<size_t> vertex_zero_executions{0};
 
-  // Record vertex 0's neighbors.
   std::vector<gbbs::uintE> neighbors_of_zero;
 
   adapter.for_each_neighbor(0, [&](gbbs::uintE neighbor) {
@@ -95,7 +103,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
   });
 
   // Round 2: Vertex 0 must not execute again.
-  // Its neighbors should receive its final message.
   termination_simulator.execute_round([&](auto& ctx) {
     if (ctx.id() == 0) {
       vertex_zero_executions.fetch_add(
@@ -154,7 +161,104 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
         "Vertices executed after global termination");
   }
 
+  if (termination_simulator.completed_rounds() != 4) {
+    throw std::runtime_error("Incorrect termination round count");
+  }
+
   std::cout << "Vertex termination verification passed!\n";
+
+  // ============================================================
+  // Test 3: One message per directed edge per round
+  // ============================================================
+
+  for (CommunicationModel model :
+       {CommunicationModel::LOCAL, CommunicationModel::CONGEST}) {
+
+    Simulator<GraphAdapter<Graph>, TestState, TestMessage>
+        duplicate_simulator(adapter, model);
+
+    if (duplicate_simulator.model() != model) {
+      throw std::runtime_error("Communication model mismatch");
+    }
+
+    std::atomic<size_t> duplicates_rejected{0};
+    std::atomic<size_t> messages_sent{0};
+
+    // Round 1:
+    // Each vertex sends one message to each neighbor.
+    // It then attempts a duplicate send to its first neighbor.
+    duplicate_simulator.execute_round([&](auto& ctx) {
+      bool has_neighbor = false;
+      gbbs::uintE first_neighbor = 0;
+
+      ctx.for_each_neighbor([&](gbbs::uintE neighbor) {
+        if (!has_neighbor) {
+          has_neighbor = true;
+          first_neighbor = neighbor;
+        }
+
+        ctx.send(neighbor, TestMessage{ctx.id()});
+        messages_sent.fetch_add(1, std::memory_order_relaxed);
+      });
+
+      if (has_neighbor) {
+        try {
+          ctx.send(first_neighbor, TestMessage{ctx.id()});
+        } catch (const std::logic_error&) {
+          duplicates_rejected.fetch_add(
+              1, std::memory_order_relaxed);
+        }
+      }
+    });
+
+    // Count vertices with at least one neighbor.
+    size_t expected_rejections = 0;
+
+    for (size_t vertex = 0; vertex < adapter.num_vertices(); ++vertex) {
+      bool has_neighbor = false;
+
+      adapter.for_each_neighbor(
+          static_cast<gbbs::uintE>(vertex),
+          [&](gbbs::uintE neighbor) {
+            has_neighbor = true;
+          });
+
+      if (has_neighbor) {
+        ++expected_rejections;
+      }
+    }
+
+    if (duplicates_rejected.load() != expected_rejections) {
+      throw std::runtime_error(
+          "Duplicate message restriction failed");
+    }
+
+    if (messages_sent.load() != G.m) {
+      throw std::runtime_error(
+          "Incorrect number of successful sends");
+    }
+
+    // Round 2: Verify that only the first messages arrived.
+    duplicate_simulator.execute_round([&](auto& ctx) {
+      const size_t expected =
+          G.get_vertex(ctx.id()).out_degree();
+
+      if (ctx.messages().size() != expected) {
+        throw std::runtime_error(
+            "Incorrect message count after duplicate rejection");
+      }
+    });
+
+    if (duplicate_simulator.completed_rounds() != 2) {
+      throw std::runtime_error("Incorrect duplicate-test round count");
+    }
+
+    if (model == CommunicationModel::LOCAL) {
+      std::cout << "LOCAL message restriction passed!\n";
+    } else {
+      std::cout << "CONGEST message restriction passed!\n";
+    }
+  }
 
   return 0.0;
 }
