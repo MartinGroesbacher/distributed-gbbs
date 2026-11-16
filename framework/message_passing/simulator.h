@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <stdexcept>
 #include <utility>
 
 #include "framework/message_passing/node_context.h"
@@ -27,12 +28,34 @@ class Simulator {
             model,
             reference_constant) {}
 
+  // Execute exactly one synchronous communication round.
   template <class F>
   void execute_round(F&& process_vertex) {
     runtime_.execute_round([&](VertexId vertex, Runtime& runtime) {
       Context ctx(vertex, runtime, graph_);
       process_vertex(ctx);
     });
+  }
+
+  // Execute rounds until all vertices have terminated.
+  //
+  // max_rounds limits the number of additional rounds executed
+  // by this call, not the lifetime total.
+  //
+  // Throws if the limit is exhausted while active vertices remain.
+  template <class F>
+  void run(F&& process_vertex, size_t max_rounds) {
+    size_t rounds_executed = 0;
+
+    while (!all_terminated() && rounds_executed < max_rounds) {
+      execute_round(process_vertex);
+      ++rounds_executed;
+    }
+
+    if (!all_terminated()) {
+      throw std::runtime_error(
+          "Simulation did not terminate within the round limit");
+    }
   }
 
   CommunicationModel model() const {
@@ -61,6 +84,14 @@ class Simulator {
 
   bool reference_bandwidth_exceeded() const {
     return runtime_.reference_bandwidth_exceeded();
+  }
+
+  // Read-only access to a vertex's final state.
+  //
+  // Intended for testing and verification after simulation.
+  // Student algorithms should use ctx.state() instead.
+  const State& state(VertexId vertex) const {
+    return static_cast<const Runtime&>(runtime_).state(vertex);
   }
 
   bool is_terminated(VertexId vertex) const {

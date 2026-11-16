@@ -30,7 +30,6 @@ class MessagePassingRuntime {
   using VertexId = gbbs::uintE;
   using MessageEnvelope = Envelope<Message>;
 
-  // Calculates the logical encoded size of a message in bits.
   using MessageSizeFunction =
       std::function<size_t(const Message&, size_t)>;
 
@@ -94,7 +93,13 @@ class MessagePassingRuntime {
     return reference_bandwidth_exceeded_;
   }
 
+  // Mutable access for the currently executing vertex.
   State& state(VertexId vertex) {
+    return states_.at(vertex);
+  }
+
+  // Read-only access for verification and inspection.
+  const State& state(VertexId vertex) const {
     return states_.at(vertex);
   }
 
@@ -102,7 +107,6 @@ class MessagePassingRuntime {
     return inboxes_.at(vertex);
   }
 
-  // Send one logical message to an adjacent vertex.
   void send(VertexId sender, VertexId recipient, const Message& message) {
     if (sender >= num_vertices() || recipient >= num_vertices()) {
       throw std::out_of_range("Invalid vertex ID");
@@ -169,14 +173,6 @@ class MessagePassingRuntime {
     });
 
     // Phase 2: Measure outgoing communication.
-    //
-    // This runs after the parallel phase, so no worker
-    // is still modifying an outbox.
-    //
-    // Statistics include messages sent to vertices that
-    // terminate during this round, even if those messages
-    // are subsequently discarded.
-
     size_t round_max_message_bits = 0;
     size_t round_total_bits = 0;
 
@@ -207,15 +203,11 @@ class MessagePassingRuntime {
     }
 
     // Phase 3: Update statistics.
-    //
-    // Because we enforce one message per directed edge
-    // per round, maximum edge load equals maximum
-    // individual message size.
-
     if (round_max_message_bits > max_message_bits_) {
       max_message_bits_ = round_max_message_bits;
     }
 
+    // One message per directed edge per round.
     if (round_max_message_bits > max_edge_bits_per_round_) {
       max_edge_bits_per_round_ = round_max_message_bits;
     }
@@ -228,12 +220,12 @@ class MessagePassingRuntime {
       reference_bandwidth_exceeded_ = true;
     }
 
-    // Phase 4: Remove messages from the previous round.
+    // Phase 4: Clear messages from the previous round.
     for (auto& inbox : inboxes_) {
       inbox.clear();
     }
 
-    // Phase 5: Deliver messages for the next round.
+    // Phase 5: Deliver outgoing messages.
     for (auto& outbox : outboxes_) {
       for (auto& message : outbox) {
         if (!is_terminated(message.recipient)) {
@@ -260,12 +252,10 @@ class MessagePassingRuntime {
 
   size_t completed_rounds_;
 
-  // Communication statistics.
   size_t max_message_bits_;
   size_t max_edge_bits_per_round_;
   size_t total_message_bits_;
 
-  // Optional CONGEST diagnostic.
   size_t reference_bandwidth_bits_;
   bool reference_bandwidth_exceeded_;
 };

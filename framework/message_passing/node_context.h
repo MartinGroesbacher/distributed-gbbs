@@ -17,7 +17,7 @@ class NodeContext {
   NodeContext(VertexId vertex, Runtime& runtime, const Graph& graph)
       : vertex_(vertex), runtime_(runtime), graph_(graph) {}
 
-  // Return the ID of the current vertex.
+  // Return this vertex's ID.
   VertexId id() const {
     return vertex_;
   }
@@ -27,17 +27,17 @@ class NodeContext {
     return graph_.num_vertices();
   }
 
-  // Access only this vertex's local state.
+  // Access this vertex's local state.
   State& state() {
     return runtime_.state(vertex_);
   }
 
-  // Read messages received during the previous round.
+  // Access messages received during the previous round.
   const std::vector<MessageEnvelope>& messages() const {
     return runtime_.inbox(vertex_);
   }
 
-  // Send a message to a neighboring vertex.
+  // Send a message to an adjacent vertex.
   void send(VertexId neighbor, const Message& message) {
     runtime_.send(vertex_, neighbor, message);
   }
@@ -49,14 +49,13 @@ class NodeContext {
     });
   }
 
-  // Iterate over the current vertex's neighbors.
+  // Iterate over this vertex's neighbors.
   template <class F>
   void for_each_neighbor(F&& f) const {
     graph_.for_each_neighbor(vertex_, f);
   }
 
-  // Terminate the current vertex.
-  // It will no longer execute in subsequent rounds.
+  // Terminate this vertex.
   void terminate() {
     runtime_.terminate(vertex_);
   }

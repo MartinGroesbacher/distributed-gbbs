@@ -11,6 +11,7 @@ namespace distributed {
 
 struct TestState {
   size_t received = 0;
+  size_t counter = 0;
 };
 
 struct TestMessage {
@@ -18,7 +19,6 @@ struct TestMessage {
   size_t extra_bits = 0;
 };
 
-// Logical encoded size of our test messages.
 size_t test_message_bits(const TestMessage& message, size_t n) {
   return vertex_id_bits(n) + message.extra_bits;
 }
@@ -285,8 +285,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
   // Test 4: Communication statistics and reference bandwidth
   // ============================================================
 
-  // We use a reference constant of 2:
-  // B(n) = 2 * max(1, ceil(log2(n))).
   const size_t reference_constant = 2;
   const size_t reference_bits =
       reference_bandwidth_bits(n, reference_constant);
@@ -298,24 +296,13 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
           CommunicationModel::CONGEST,
           reference_constant);
 
-  if (statistics_simulator.reference_bandwidth_bits() !=
-      reference_bits) {
-    throw std::runtime_error(
-        "Incorrect reference bandwidth");
-  }
-
-  // Round 1: Send messages of different sizes.
-  //
-  // Vertex 0 sends a deliberately large message.
-  // Other vertices send ordinary vertex IDs.
+  // Round 1: Vertex 0 sends larger messages.
   statistics_simulator.execute_round([](auto& ctx) {
     const size_t extra_bits = (ctx.id() == 0) ? 100 : 0;
 
     ctx.broadcast(TestMessage{ctx.id(), extra_bits});
   });
 
-  // Expected maximum message size.
-  // If vertex 0 has neighbors, its large message was sent.
   const size_t expected_max =
       neighbors_of_zero.empty() ? id_bits : id_bits + 100;
 
@@ -331,14 +318,18 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
         "Incorrect maximum edge communication");
   }
 
-  // Every adjacency entry produces one message.
-  // Messages from vertex 0 contain 100 additional bits.
   const size_t expected_total =
       G.m * id_bits + neighbors_of_zero.size() * 100;
 
   if (statistics_simulator.total_message_bits() != expected_total) {
     throw std::runtime_error(
         "Incorrect total communication volume");
+  }
+
+  if (statistics_simulator.reference_bandwidth_bits() !=
+      reference_bits) {
+    throw std::runtime_error(
+        "Incorrect reference bandwidth");
   }
 
   const bool expected_warning =
@@ -350,7 +341,7 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
         "Incorrect reference bandwidth warning");
   }
 
-  // Round 2: Check that large messages were delivered normally.
+  // Round 2: Large messages must still be delivered.
   statistics_simulator.execute_round([&](auto& ctx) {
     const size_t expected =
         G.get_vertex(ctx.id()).out_degree();
@@ -372,8 +363,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
     }
   });
 
-  // No new messages were sent in round 2.
-  // The accumulated statistics must remain unchanged.
   if (statistics_simulator.total_message_bits() != expected_total) {
     throw std::runtime_error(
         "Communication statistics changed unexpectedly");
@@ -386,7 +375,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
 
   std::cout << "Communication statistics verification passed!\n";
 
-  // Print an example of the recorded statistics.
   std::cout << "  Vertices: " << n << "\n";
   std::cout << "  Rounds: "
             << statistics_simulator.completed_rounds() << "\n";
@@ -406,6 +394,100 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
             << (statistics_simulator.reference_bandwidth_exceeded()
                     ? "yes" : "no")
             << "\n";
+
+  // ============================================================
+  // Test 5: Automatic execution and final state inspection
+  // ============================================================
+
+  Simulator<GraphAdapter<Graph>, TestState, TestMessage>
+      automatic_simulator(
+          adapter,
+          test_message_bits,
+          CommunicationModel::CONGEST);
+
+  // Each vertex increments its local counter once per round.
+  // It terminates after its third execution.
+  auto counting_algorithm = [](auto& ctx) {
+    ++ctx.state().counter;
+
+    if (ctx.state().counter == 3) {
+      ctx.terminate();
+    }
+  };
+
+  // First, deliberately choose an insufficient round limit.
+  bool limit_reached = false;
+
+  try {
+    automatic_simulator.run(counting_algorithm, 2);
+  } catch (const std::runtime_error&) {
+    limit_reached = true;
+  }
+
+  if (!limit_reached) {
+    throw std::runtime_error(
+        "Round limit was not enforced");
+  }
+
+  if (automatic_simulator.completed_rounds() != 2) {
+    throw std::runtime_error(
+        "Incorrect round count after limit");
+  }
+
+  if (automatic_simulator.all_terminated()) {
+    throw std::runtime_error(
+        "Vertices terminated too early");
+  }
+
+  // State must persist after the round-limit exception.
+  for (size_t vertex = 0; vertex < n; ++vertex) {
+    const auto id = static_cast<gbbs::uintE>(vertex);
+
+    if (automatic_simulator.state(id).counter != 2) {
+      throw std::runtime_error(
+          "Vertex state was not preserved");
+    }
+  }
+
+  // Resume execution. One additional round is sufficient.
+  automatic_simulator.run(counting_algorithm, 1);
+
+  if (!automatic_simulator.all_terminated()) {
+    throw std::runtime_error(
+        "Automatic termination failed");
+  }
+
+  if (automatic_simulator.completed_rounds() != 3) {
+    throw std::runtime_error(
+        "Incorrect automatic execution round count");
+  }
+
+  // Verify final local states through the read-only interface.
+  const auto& finished_simulator = automatic_simulator;
+
+  for (size_t vertex = 0; vertex < n; ++vertex) {
+    const auto id = static_cast<gbbs::uintE>(vertex);
+
+    if (finished_simulator.state(id).counter != 3) {
+      throw std::runtime_error(
+          "Incorrect final vertex state");
+    }
+
+    if (!finished_simulator.is_terminated(id)) {
+      throw std::runtime_error(
+          "Vertex did not terminate");
+    }
+  }
+
+  // Running an already completed simulation must do nothing.
+  automatic_simulator.run(counting_algorithm, 0);
+
+  if (automatic_simulator.completed_rounds() != 3) {
+    throw std::runtime_error(
+        "Completed simulation executed additional rounds");
+  }
+
+  std::cout << "Automatic execution verification passed!\n";
 
   return 0.0;
 }
