@@ -30,9 +30,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
   const size_t n = adapter.num_vertices();
   const size_t id_bits = vertex_id_bits(n);
 
-  // ============================================================
-  // Test 1: Basic message passing through NodeContext
-  // ============================================================
 
   Simulator<GraphAdapter<Graph>, TestState, TestMessage> simulator(
       adapter, test_message_bits, CommunicationModel::CONGEST);
@@ -41,7 +38,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
     throw std::runtime_error("Incorrect communication model");
   }
 
-  // Round 1: Every vertex broadcasts its own ID.
   simulator.execute_round([](auto& ctx) {
     if (!ctx.messages().empty()) {
       throw std::runtime_error("Initial inbox is not empty");
@@ -50,7 +46,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
     ctx.broadcast(TestMessage{ctx.id()});
   });
 
-  // Round 2: Verify received messages.
   simulator.execute_round([&](auto& ctx) {
     const auto& messages = ctx.messages();
 
@@ -69,7 +64,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
     ctx.state().received = messages.size();
   });
 
-  // Round 3: Old messages must have disappeared.
   simulator.execute_round([](auto& ctx) {
     if (!ctx.messages().empty()) {
       throw std::runtime_error("Old messages were not cleared");
@@ -90,10 +84,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
 
   std::cout << "NodeContext verification passed!\n";
 
-  // ============================================================
-  // Test 2: Vertex termination
-  // ============================================================
-
   if (n == 0) {
     throw std::runtime_error("Termination test requires a nonempty graph");
   }
@@ -109,7 +99,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
     neighbors_of_zero.push_back(neighbor);
   });
 
-  // Round 1: Vertex 0 broadcasts and terminates.
   termination_simulator.execute_round([&](auto& ctx) {
     if (ctx.id() == 0) {
       vertex_zero_executions.fetch_add(
@@ -120,7 +109,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
     }
   });
 
-  // Round 2: Vertex 0 must not execute again.
   termination_simulator.execute_round([&](auto& ctx) {
     if (ctx.id() == 0) {
       vertex_zero_executions.fetch_add(
@@ -157,7 +145,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
     throw std::runtime_error("Vertex 0 was not terminated");
   }
 
-  // Round 3: Terminate all remaining vertices.
   termination_simulator.execute_round([](auto& ctx) {
     ctx.terminate();
   });
@@ -166,7 +153,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
     throw std::runtime_error("Not all vertices terminated");
   }
 
-  // Round 4: No vertex should execute anymore.
   std::atomic<size_t> executions_after_termination{0};
 
   termination_simulator.execute_round([&](auto& ctx) {
@@ -184,10 +170,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
   }
 
   std::cout << "Vertex termination verification passed!\n";
-
-  // ============================================================
-  // Test 3: One message per directed edge per round
-  // ============================================================
 
   for (CommunicationModel model :
        {CommunicationModel::LOCAL, CommunicationModel::CONGEST}) {
@@ -280,10 +262,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
       std::cout << "CONGEST message restriction passed!\n";
     }
   }
-
-  // ============================================================
-  // Test 4: Communication statistics and reference bandwidth
-  // ============================================================
 
   const size_t reference_constant = 2;
   const size_t reference_bits =
@@ -395,18 +373,12 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
                     ? "yes" : "no")
             << "\n";
 
-  // ============================================================
-  // Test 5: Automatic execution and final state inspection
-  // ============================================================
-
   Simulator<GraphAdapter<Graph>, TestState, TestMessage>
       automatic_simulator(
           adapter,
           test_message_bits,
           CommunicationModel::CONGEST);
 
-  // Each vertex increments its local counter once per round.
-  // It terminates after its third execution.
   auto counting_algorithm = [](auto& ctx) {
     ++ctx.state().counter;
 
@@ -415,7 +387,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
     }
   };
 
-  // First, deliberately choose an insufficient round limit.
   bool limit_reached = false;
 
   try {
@@ -439,7 +410,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
         "Vertices terminated too early");
   }
 
-  // State must persist after the round-limit exception.
   for (size_t vertex = 0; vertex < n; ++vertex) {
     const auto id = static_cast<gbbs::uintE>(vertex);
 
@@ -449,7 +419,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
     }
   }
 
-  // Resume execution. One additional round is sufficient.
   automatic_simulator.run(counting_algorithm, 1);
 
   if (!automatic_simulator.all_terminated()) {
@@ -462,7 +431,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
         "Incorrect automatic execution round count");
   }
 
-  // Verify final local states through the read-only interface.
   const auto& finished_simulator = automatic_simulator;
 
   for (size_t vertex = 0; vertex < n; ++vertex) {
@@ -479,7 +447,6 @@ double test_node_context(Graph& G, gbbs::commandLine P) {
     }
   }
 
-  // Running an already completed simulation must do nothing.
   automatic_simulator.run(counting_algorithm, 0);
 
   if (automatic_simulator.completed_rounds() != 3) {

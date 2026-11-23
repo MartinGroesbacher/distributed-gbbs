@@ -7,9 +7,7 @@
 
 namespace assignment1 {
 
-// ============================================================
 // Message types
-// ============================================================
 
 // You may extend or replace these definitions.
 enum class MessageType {
@@ -20,13 +18,10 @@ enum class MessageType {
 struct Message {
   MessageType type = MessageType::PRIORITY;
 
-  // Randomized priorities.
   std::uint64_t priority = 0;
 };
 
-// ============================================================
-// Local vertex state
-// ============================================================
+// Local Vertex State
 
 // You may extend or replace these definitions.
 enum class Status {
@@ -42,23 +37,13 @@ struct State {
   // Add any local variables needed by your MIS algorithm here.
 };
 
-// ============================================================
-// Communication accounting
-// ============================================================
-
+// Communication counting
 // Returns the number of bits in the message.
-//
 // The function implementation in algorithm.cpp.
 size_t message_bits(const Message& message, size_t n);
 
-// ============================================================
-// Distributed algorithm
-// ============================================================
-
 // Called once per active vertex in every synchronous round.
-//
 // You have to implement the randomized MIS algorithm here.
-//
 // Available operations include:
 //
 //   ctx.id()

@@ -36,7 +36,6 @@ double test_graph_adapter(Graph& G, gbbs::commandLine P) {
     }
   });
 
-  // These checks remain active in optimized builds.
   if (n != G.n ||
       total_edges.load() != G.m ||
       invalid_neighbors.load() != 0 ||
